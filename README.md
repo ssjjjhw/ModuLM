@@ -38,6 +38,28 @@ python CombiSolv.py
 python CombiSolv_3d.py
 ```
 
+## ModuLM Config
+* We provide the configuration of the best-performing model from our paper, and you can run it directly with `bash python demo.py`.
+
+* You can specify the dataset to use by the config below and the rest of the dataset configuration can follow the default settings. If you wish to make modifications, you can edit the configuration file yourself.
+```json
+{
+  "root": "data/DDI/DeepDDI/"
+}
+```
+
+* You can specify the molecular data format by setting `use_3d` or `use_2d` to `true`. Correspondingly, you can choose the encoder under the selected data format, as shown in the following example:
+
+```json
+{
+  "use_3d": true,
+  "graph3d": "unimol"
+}
+```
+
+
+
+
 
 
 
