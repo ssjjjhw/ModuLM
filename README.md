@@ -69,7 +69,7 @@ python CombiSolv_3d.py
 
 * You can use the default configuration for LoRA that we provide.
 
-* The specific methods for calculating the model performance evaluation metrics are provided in the `testresult` folder.
+* The specific methods for calculating the model performance evaluation metrics are provided in the `test——result` folder.
 
 
 
