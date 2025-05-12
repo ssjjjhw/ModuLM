@@ -56,8 +56,20 @@ python CombiSolv_3d.py
   "graph3d": "unimol"
 }
 ```
+* You can select the backbone and choose between fine-tuning or pretraining by specifying the configuration as shown below. Note that different methods correspond to different datasets. To select the backbone and set fine-tuning or pretraining mode, use the following configuration:
 
+```json
+{
+  "mode": "ft",
+  "backbone": "DeepSeek-1.5B",
+  "min_len": 10,
+  "max_len": 40
+}
+```
 
+* You can use the default configuration for LoRA that we provide.
+
+* The specific methods for calculating the model performance evaluation metrics are provided in the `testresult` folder.
 
 
 
