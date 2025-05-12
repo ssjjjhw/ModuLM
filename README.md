@@ -8,27 +8,17 @@ See `modulm.yml`. Run the following command to create a new anaconda environment
 conda env create -f modulm.yml
 ```
 
-# Dataset and Model Usage Instructions
+# Dataset and Backbone
 
-## Dataset
+* **Dataset**
 
-The datasets used in this project can be downloaded from the [MolTC project](https://github.com/MangoKiller/MolTC/).  
+* The datasets used in this project can be downloaded from the [MolTC](https://github.com/MangoKiller/MolTC/).  
 All data should be placed in the `/data` folder.
 
-## LLM Backbone Models
+* **LLM Backbone Models**
 
-The backbones of different Large Language Models (LLMs) can be downloaded from Hugging Face.  
+* The backbones of different Large Language Models (LLMs) can be downloaded from [Hugging Face](https://huggingface.co/).  
 Please make sure the downloaded LLMs are stored in the `backbone` folder.
 
-## DDI Tasks
-
-For Drug–Drug Interaction (DDI) tasks, we provide code for training separately on all DDI datasets.  
-We plan to release code for joint training across all DDI datasets in the future.
-
-## Solvation Gibbs Free Energy Prediction
-
-For solvation Gibbs free energy prediction tasks:
-
-- You can run the pretraining stage using the provided pretraining data.
-- Fine-tuning may converge in just a few epochs, so early stopping or truncation is recommended.
+* It is worth noting that in ModuLM, to ensure a fairer comparison, we adopted a configuration similar to Galactica. This means that if you download other series of LLMs for extension, you will need to make some modifications to the pretokenizer in the tokenizer vocabulary. For specific changes, you can refer to the tokenizer used in Galactica.
 
