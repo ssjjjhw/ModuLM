@@ -69,7 +69,25 @@ python CombiSolv_3d.py
 
 * You can use the default configuration for LoRA that we provide.
 
+
+* The reference configuration for training is as follows:
+
+```json
+{
+  "batch_size": 12,
+  "max_epochs": "30",
+  "save_every_n_epochs": 5,
+  "scheduler": "linear_warmup_cosine_lr",
+  "seed": 42,
+  "warmup_lr": 1e-06,
+  "warmup_steps": 1000,
+  "weight_decay": "0.05"
+}
+```
+
 * The specific methods for calculating the model performance evaluation metrics are provided in the `test_result` folder.
+* The configuration file offers more parameters for you to choose from. You can modify different parameters according to your specific needs.
+
 
 
 
