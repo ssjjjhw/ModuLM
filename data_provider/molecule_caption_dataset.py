@@ -1,0 +1,818 @@
+import torch
+from torch_geometric.data import Dataset
+import os
+import pandas as pd
+import numpy as np
+
+
+import re
+from rdkit import Chem
+from rdkit.Chem import BRICS
+
+def extract_smiles(input_string: str) -> str:
+    """
+    从给定的字符串中提取 SMILES 表达式。
+    
+    参数:
+        input_string (str): 包含 SMILES 表达式的字符串。
+        
+    返回:
+        str: 提取的 SMILES 表达式。如果未找到，则返回 None。
+    """
+    # 使用正则表达式提取 SMILES
+    match = re.search(r'\[START_I_SMILES\](.*?)\[END_I_SMILES\]', input_string)
+    return match.group(1)
+
+import numpy as np
+import pickle
+import pandas as pd
+
+from keras import backend as K
+from keras.models import Model
+from keras.layers import Input, MaxPooling1D, Dropout, Activation
+from keras.layers import Conv1D, Dense, Flatten, BatchNormalization
+from keras.optimizers import Adam
+from keras.callbacks import LearningRateScheduler
+from sklearn.metrics import f1_score
+from sklearn.model_selection import train_test_split 
+from pathlib import Path
+import click
+from rdkit import Chem
+from rdkit import RDLogger
+from scipy.interpolate import interp1d
+
+
+functional_groups = {
+    'Acid anhydride': Chem.MolFromSmarts('[CX3](=[OX1])[OX2][CX3](=[OX1])'),
+    'Acyl halide': Chem.MolFromSmarts('[CX3](=[OX1])[F,Cl,Br,I]'),
+    'Alcohol': Chem.MolFromSmarts('[#6][OX2H]'),
+    'Aldehyde': Chem.MolFromSmarts('[CX3H1](=O)[#6,H]'),
+    'Alkane': Chem.MolFromSmarts('[CX4;H3,H2]'),
+    'Alkene': Chem.MolFromSmarts('[CX3]=[CX3]'),
+    'Alkyne': Chem.MolFromSmarts('[CX2]#[CX2]'),
+    'Amide': Chem.MolFromSmarts('[NX3][CX3](=[OX1])[#6]'),
+    'Amine': Chem.MolFromSmarts('[NX3;H2,H1,H0;!$(NC=O)]'),
+    'Arene': Chem.MolFromSmarts('[cX3]1[cX3][cX3][cX3][cX3][cX3]1'),
+    'Azo compound': Chem.MolFromSmarts('[#6][NX2]=[NX2][#6]'),
+    'Carbamate': Chem.MolFromSmarts('[NX3][CX3](=[OX1])[OX2H0]'),
+    'Carboxylic acid': Chem.MolFromSmarts('[CX3](=O)[OX2H]'),
+    'Enamine': Chem.MolFromSmarts('[NX3][CX3]=[CX3]'),
+    'Enol': Chem.MolFromSmarts('[OX2H][#6X3]=[#6]'),
+    'Ester': Chem.MolFromSmarts('[#6][CX3](=O)[OX2H0][#6]'),
+    'Ether': Chem.MolFromSmarts('[OD2]([#6])[#6]'),
+    'Haloalkane': Chem.MolFromSmarts('[#6][F,Cl,Br,I]'),
+    'Hydrazine': Chem.MolFromSmarts('[NX3][NX3]'),
+    'Hydrazone': Chem.MolFromSmarts('[NX3][NX2]=[#6]'),
+    'Imide': Chem.MolFromSmarts('[CX3](=[OX1])[NX3][CX3](=[OX1])'),
+    'Imine': Chem.MolFromSmarts('[$([CX3]([#6])[#6]),$([CX3H][#6])]=[$([NX2][#6]),$([NX2H])]'),
+    'Isocyanate': Chem.MolFromSmarts('[NX2]=[C]=[O]'),
+    'Isothiocyanate': Chem.MolFromSmarts('[NX2]=[C]=[S]'),
+    'Ketone': Chem.MolFromSmarts('[#6][CX3](=O)[#6]'),
+    'Nitrile': Chem.MolFromSmarts('[NX1]#[CX2]'),
+    'Phenol': Chem.MolFromSmarts('[OX2H][cX3]:[c]'),
+    'Phosphine': Chem.MolFromSmarts('[PX3]'),
+    'Sulfide': Chem.MolFromSmarts('[#16X2H0]'),
+    'Sulfonamide': Chem.MolFromSmarts('[#16X4]([NX3])(=[OX1])(=[OX1])[#6]'),
+    'Sulfonate': Chem.MolFromSmarts('[#16X4](=[OX1])(=[OX1])([#6])[OX2H0]'),
+    'Sulfone': Chem.MolFromSmarts('[#16X4](=[OX1])(=[OX1])([#6])[#6]'),
+    'Sulfonic acid': Chem.MolFromSmarts('[#16X4](=[OX1])(=[OX1])([#6])[OX2H]'),
+    'Sulfoxide': Chem.MolFromSmarts('[#16X3]=[OX1]'),
+    'Thial': Chem.MolFromSmarts('[CX3H1](=S)[#6,H]'),
+    'Thioamide': Chem.MolFromSmarts('[NX3][CX3]=[SX1]'),
+    'Thiol': Chem.MolFromSmarts('[#16X2H]')
+}
+
+def match_group(mol: Chem.Mol, func_group) -> list:
+    """返回匹配的官能团子结构列表（包含字典格式的SMILES和原子索引）。"""
+    matches = mol.GetSubstructMatches(func_group)
+    matched_info = []
+    
+    for match in matches:
+        # 将每个匹配的子结构转为SMILES字符串
+        substructure_smiles = Chem.MolFragmentToSmiles(mol, match)
+        matched_info.append({
+            'fragment': substructure_smiles,
+            'atom_indices': list(match)  # 将元组转换为列表以便于返回
+        })
+    
+    return matched_info if matched_info else []
+
+def get_functional_groups(smiles: str) -> list:
+    """返回匹配的官能团子结构列表（包含字典格式的SMILES和原子索引）。"""
+    RDLogger.DisableLog('rdApp.*')
+    smiles = smiles.strip().replace(' ', '')
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None: 
+        return None  # 无效的SMILES返回None
+
+    matched_substructures = []
+    # 遍历功能基团字典，检查分子中是否包含每个基团
+    for func_group_name, smarts in functional_groups.items():
+        matched_structures = match_group(mol, smarts)
+        if matched_structures:  # 如果匹配成功
+            # 将所有匹配的子结构和对应的原子索引添加到列表中
+            matched_substructures.extend(matched_structures)
+    
+    # 如果没有匹配到任何子结构，返回原SMILES和空的原子索引
+    if len(matched_substructures) == 0:
+        matched_substructures.append({
+            'fragment': smiles,
+            'atom_indices': []
+        })
+    
+    return matched_substructures
+
+def count_subdirectories(folder_path):
+    try:
+        # 获取文件夹下的所有文件和子文件夹名
+        entries = os.listdir(folder_path)
+
+        # 过滤出子文件夹
+        subdirectories = [entry for entry in entries if os.path.isdir(os.path.join(folder_path, entry))]
+
+        # 返回子文件夹的数量
+        return len(subdirectories)
+    except FileNotFoundError:
+        print(f"文件夹 '{folder_path}' 不存在。")
+        return -1  # 返回 -1 表示文件夹不存在
+    except Exception as e:
+        print(f"发生错误：{e}")
+        return -2  # 返回 -2 表示发生了其他错误
+class MoleculeCaption(Dataset):
+    def __init__(self, root, text_max_len, prompt=None):
+        super(MoleculeCaption, self).__init__(root)
+        self.root = root
+        self.text_max_len = text_max_len
+        self.graph_name_list = os.listdir(root+'graph/')
+        self.graph_name_list.sort()
+        self.text_name_list = os.listdir(root+'text/')
+        self.text_name_list.sort()
+        self.smiles_name_list = os.listdir(root+'smiles/')
+        self.smiles_name_list.sort()
+        self.tokenizer = None
+        
+        if not prompt:
+            self.prompt = 'The SMILES of this molecule is [START_I_SMILES]{}[END_I_SMILES]. '
+        else:
+            self.prompt = prompt
+
+    def get(self, index):
+        return self.__getitem__(index)
+
+    def len(self):
+        return len(self)
+
+    def __len__(self):
+        return len(self.graph_name_list)
+
+    def __getitem__(self, index):
+        graph_name, text_name = self.graph_name_list[index], self.text_name_list[index]
+        smiles_name = self.smiles_name_list[index]
+
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph', graph_name)
+        data_graph = torch.load(graph_path)
+        # load and process text
+        text_path = os.path.join(self.root, 'text', text_name)
+        
+        text_list = []
+        count = 0
+        for line in open(text_path, 'r', encoding='utf-8'):
+            count += 1
+            text_list.append(line.strip('\n'))
+            if count > 100:
+                break
+        text = ' '.join(text_list) + '\n'
+
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles', smiles_name)
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt = self.prompt
+        return data_graph, text, smiles_prompt
+    
+    def tokenizer_text(self, text):
+        sentence_token = self.tokenizer(text=text,
+                                        truncation=True,
+                                        padding='max_length',
+                                        add_special_tokens=True,
+                                        max_length=self.text_max_len,
+                                        return_tensors='pt',
+                                        return_attention_mask=True)
+        return sentence_token
+
+class MoleculeCaption_double(Dataset):
+    def __init__(self, root, text_max_len, prompt=None,zijiegou=False,autozijiegou=False,solve=False):
+        super(MoleculeCaption_double, self).__init__(root)
+        self.root = root
+        self.text_max_len = text_max_len
+        self.tokenizer = None
+        
+        self.zijiegou = zijiegou
+        self.autozijiegou = autozijiegou
+        self.solve = solve
+        if not prompt:
+            self.prompt = 'The SMILES of this molecule is [START_I_SMILES]{}[END_I_SMILES]. '
+        else:
+            self.prompt = prompt
+
+    def get(self, index):
+        return self.__getitem__(index)
+
+    def len(self):
+        return len(self)
+
+    def __len__(self):
+
+        if 'train' in self.root:
+            return count_subdirectories(self.root+"text/")
+        else :
+            return count_subdirectories(self.root+"text/")
+    #return 5
+
+    def __getitem__(self, index):
+        graph1_name_list = os.listdir(self.root+'graph1/'+str(index)+'/')
+        smiles1_name_list = os.listdir(self.root+'smiles1/'+str(index)+'/')
+        graph2_name_list = os.listdir(self.root+'graph2/'+str(index)+'/')
+        smiles2_name_list = os.listdir(self.root+'smiles2/'+str(index)+'/')
+        text_name_list = os.listdir(self.root+'text/'+str(index)+'/')
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph1/'+str(index)+'/',graph1_name_list[0])
+        data_graph1 = torch.load(graph_path)
+
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles1/'+str(index)+'/', smiles1_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt1 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt1 = self.prompt
+        
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph2/'+str(index)+'/',graph2_name_list[0])
+        data_graph2 = torch.load(graph_path)
+
+        if data_graph1.x.size(0)<8 or data_graph2.x.size(0) < 8:
+            # print('pass')
+            return self.__getitem__((index + 1) % self.len())
+
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles2/'+str(index)+'/', smiles2_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt2 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt2 = self.prompt
+            
+        # smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s> '+smiles_prompt2+' </s>.'
+        # smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s> '+smiles_prompt2+' </s>.'+'Answer:'
+        if self.autozijiegou==False:
+            smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s> '+smiles_prompt2+' </s>.'
+        else:
+            if self.solve == False:
+                smiles_prompt1 = '</s>'+'The first molecule is'+smiles_prompt1
+                smiles_prompt2 = ' </s>'+'.The second molecule is'+smiles_prompt2
+                smiles_prompt3 = '.The relationship between them is'#后续处理添加moltokenid作为子结构交互作用的嵌入
+                smiles_prompt4 = '.What are the side effects of these two drugs?'
+                smiles_prompt = [smiles_prompt1, smiles_prompt2, smiles_prompt3, smiles_prompt4]
+            else:
+                smiles_prompt1 = '</s>'+'The first molecule is'+smiles_prompt1
+                smiles_prompt2 = ' </s>'+'.The second molecule is'+smiles_prompt2
+                smiles_prompt3 = '.The relationship between them is'#后续处理添加moltokenid作为子结构交互作用的嵌入
+                smiles_prompt4 = '.What is the solvation Gibbs free energy of this pair of molecules?'
+                smiles_prompt = [smiles_prompt1, smiles_prompt2, smiles_prompt3, smiles_prompt4]
+        # load and process text
+        text_path = os.path.join(self.root, 'text/'+str(index)+'/', text_name_list[0])
+        
+        # print(smiles_prompt1,'*********',smiles_prompt2)
+        # print(extract_smiles(smiles_prompt1),'sssssssss',extract_smiles(smiles_prompt2))
+        
+        if self.zijiegou==True:
+            zijiegou1 = get_functional_groups(extract_smiles(smiles_prompt1))
+            zijiegou2 = get_functional_groups(extract_smiles(smiles_prompt2))
+        text_list = []
+        count = 0
+        for line in open(text_path, 'r', encoding='utf-8'):
+            count += 1
+            text_list.append(line.strip('\n'))
+            if count > 100:
+                break
+        text = ' '.join(text_list)
+        # print('&&&&&&&&&',text_list)
+
+        if self.zijiegou==False:
+            return data_graph1,data_graph2, text ,smiles_prompt
+        else:
+            return data_graph1,data_graph2, text ,smiles_prompt,zijiegou1,zijiegou2
+    
+    def tokenizer_text(self, text):
+        sentence_token = self.tokenizer(text=text,
+                                        truncation=True,
+                                        padding='max_length',
+                                        add_special_tokens=True,
+                                        max_length=self.text_max_len,
+                                        return_tensors='pt',
+                                        return_attention_mask=True)
+        return sentence_token
+    
+class MoleculeCaption_double_old(Dataset):
+    def __init__(self, root, text_max_len, prompt=None,zijiegou=False):
+        super(MoleculeCaption_double, self).__init__(root)
+        self.root = root
+        self.text_max_len = text_max_len
+        self.tokenizer = None
+        
+        self.zijiegou = zijiegou
+        
+        if not prompt:
+            self.prompt = 'The SMILES of this molecule is [START_I_SMILES]{}[END_I_SMILES]. '
+        else:
+            self.prompt = prompt
+
+    def get(self, index):
+        return self.__getitem__(index)
+
+    def len(self):
+        return len(self)
+
+    def __len__(self):
+
+        if 'train' in self.root:
+            return count_subdirectories(self.root+"text/")
+        else :
+            return count_subdirectories(self.root+"text/")
+    #return 5
+
+    def __getitem__(self, index):
+        graph1_name_list = os.listdir(self.root+'graph1/'+str(index)+'/')
+        smiles1_name_list = os.listdir(self.root+'smiles1/'+str(index)+'/')
+        graph2_name_list = os.listdir(self.root+'graph2/'+str(index)+'/')
+        smiles2_name_list = os.listdir(self.root+'smiles2/'+str(index)+'/')
+        text_name_list = os.listdir(self.root+'text/'+str(index)+'/')
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph1/'+str(index)+'/',graph1_name_list[0])
+        data_graph1 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles1/'+str(index)+'/', smiles1_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt1 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt1 = self.prompt
+        
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph2/'+str(index)+'/',graph2_name_list[0])
+        data_graph2 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles2/'+str(index)+'/', smiles2_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt2 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt2 = self.prompt
+            
+        # smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s> '+smiles_prompt2+' </s>.'
+        smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s> '+smiles_prompt2+' </s>.'+'Answer:'
+        # load and process text
+        text_path = os.path.join(self.root, 'text/'+str(index)+'/', text_name_list[0])
+        
+        # print(smiles_prompt1,'*********',smiles_prompt2)
+        # print(extract_smiles(smiles_prompt1),'sssssssss',extract_smiles(smiles_prompt2))
+        
+        if self.zijiegou==True:
+            zijiegou1 = get_functional_groups(extract_smiles(smiles_prompt1))
+            zijiegou2 = get_functional_groups(extract_smiles(smiles_prompt2))
+        text_list = []
+        count = 0
+        for line in open(text_path, 'r', encoding='utf-8'):
+            count += 1
+            text_list.append(line.strip('\n'))
+            if count > 100:
+                break
+        text = ' '.join(text_list)
+        if self.zijiegou==False:
+            return data_graph1,data_graph2, text ,smiles_prompt
+        else:
+            return data_graph1,data_graph2, text ,smiles_prompt,zijiegou1,zijiegou2
+    
+    def tokenizer_text(self, text):
+        sentence_token = self.tokenizer(text=text,
+                                        truncation=True,
+                                        padding='max_length',
+                                        add_special_tokens=True,
+                                        max_length=self.text_max_len,
+                                        return_tensors='pt',
+                                        return_attention_mask=True)
+        return sentence_token
+
+class MoleculeCaption_double_value(Dataset):
+    def __init__(self, root, text_max_len, prompt=None):
+        super(MoleculeCaption_double_value, self).__init__(root)
+        self.root = root
+        self.text_max_len = text_max_len
+        self.tokenizer = None
+        
+        if not prompt:
+            self.prompt = 'The SMILES of this molecule is [START_I_SMILES]{}[END_I_SMILES]. '
+        else:
+            self.prompt = prompt
+
+    def get(self, index):
+        return self.__getitem__(index)
+
+    def len(self):
+        return len(self)
+
+    def __len__(self):
+
+        if 'train' in self.root:
+            return count_subdirectories(self.root+"text/")
+        else :
+            return count_subdirectories(self.root+"text/")
+            #return 100
+    #return 5
+
+    def __getitem__(self, index):
+        graph1_name_list = os.listdir(self.root+'graph1/'+str(index)+'/')
+        smiles1_name_list = os.listdir(self.root+'smiles1/'+str(index)+'/')
+        graph2_name_list = os.listdir(self.root+'graph2/'+str(index)+'/')
+        smiles2_name_list = os.listdir(self.root+'smiles2/'+str(index)+'/')
+        text_name_list = os.listdir(self.root+'text/'+str(index)+'/')
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph1/'+str(index)+'/',graph1_name_list[0])
+        data_graph1 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles1/'+str(index)+'/', smiles1_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt1 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt1 = self.prompt
+        
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph2/'+str(index)+'/',graph2_name_list[0])
+        data_graph2 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles2/'+str(index)+'/', smiles2_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt2 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt2 = self.prompt
+            
+        smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s>'+smiles_prompt2+' </s> .'+" what is the solvation Gibbs free energy of this pair of molecules?"
+        # load and process text
+        text_path = os.path.join(self.root, 'text/'+str(index)+'/', text_name_list[0])
+        
+        text_list = []
+        count = 0
+        for line in open(text_path, 'r', encoding='utf-8'):
+            count += 1
+            text_list.append(line.strip('\n'))
+            if count > 100:
+                break
+        text = ' '.join(text_list)
+        return data_graph1,data_graph2, text ,smiles_prompt
+    
+    def tokenizer_text(self, text):
+        sentence_token = self.tokenizer(text=text,
+                                        truncation=True,
+                                        padding='max_length',
+                                        add_special_tokens=True,
+                                        max_length=self.text_max_len,
+                                        return_tensors='pt',
+                                        return_attention_mask=True)
+        return sentence_token    
+    
+class MoleculeCaption_double_DDIvalue(Dataset):
+    def __init__(self, root, text_max_len, prompt=None):
+        super(MoleculeCaption_double_DDIvalue, self).__init__(root)
+        self.root = root
+        self.text_max_len = text_max_len
+        self.tokenizer = None
+        
+        if not prompt:
+            self.prompt = 'The SMILES of this molecule is [START_I_SMILES]{}[END_I_SMILES]. '
+        else:
+            self.prompt = prompt
+
+    def get(self, index):
+        return self.__getitem__(index)
+
+    def len(self):
+        return len(self)
+
+    def __len__(self):
+
+        if 'train' in self.root:
+            return count_subdirectories(self.root+"text/")
+        else :
+            return count_subdirectories(self.root+"text/")
+    #return 5
+
+    def __getitem__(self, index):
+        graph1_name_list = os.listdir(self.root+'graph1/'+str(index)+'/')
+        smiles1_name_list = os.listdir(self.root+'smiles1/'+str(index)+'/')
+        graph2_name_list = os.listdir(self.root+'graph2/'+str(index)+'/')
+        smiles2_name_list = os.listdir(self.root+'smiles2/'+str(index)+'/')
+        text_name_list = os.listdir(self.root+'text/'+str(index)+'/')
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph1/'+str(index)+'/',graph1_name_list[0])
+        data_graph1 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles1/'+str(index)+'/', smiles1_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt1 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt1 = self.prompt
+        
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph2/'+str(index)+'/',graph2_name_list[0])
+        data_graph2 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles2/'+str(index)+'/', smiles2_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt2 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt2 = self.prompt
+            
+        smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s>'+smiles_prompt2+' </s> .'+" What are the side effects of these two drugs?"
+        # load and process text
+        text_path = os.path.join(self.root, 'text/'+str(index)+'/', text_name_list[0])
+        
+        text_list = []
+        count = 0
+        for line in open(text_path, 'r', encoding='utf-8'):
+            count += 1
+            text_list.append(line.strip('\n'))
+            if count > 100:
+                break
+        text = ' '.join(text_list)
+        return data_graph1,data_graph2, text ,smiles_prompt
+    
+    def tokenizer_text(self, text):
+        sentence_token = self.tokenizer(text=text,
+                                        truncation=True,
+                                        padding='max_length',
+                                        add_special_tokens=True,
+                                        max_length=self.text_max_len,
+                                        return_tensors='pt',
+                                        return_attention_mask=True)
+        return sentence_token    
+class MoleculeCaption_double_fgtvalue(Dataset):
+    def __init__(self, root, text_max_len, prompt=None):
+        super(MoleculeCaption_double_fgtvalue, self).__init__(root)
+        self.root = root
+        self.text_max_len = text_max_len
+        self.tokenizer = None
+        
+        if not prompt:
+            self.prompt = 'The SMILES of this molecule is [START_I_SMILES]{}[END_I_SMILES]. '
+        else:
+            self.prompt = prompt
+
+    def get(self, index):
+        return self.__getitem__(index)
+
+    def len(self):
+        return len(self)
+
+    def __len__(self):
+
+        if 'train' in self.root:
+            return count_subdirectories(self.root+"text/")
+        else :
+            return count_subdirectories(self.root+"text/")
+            #return 100
+    #return 5
+
+    def __getitem__(self, index):
+        graph1_name_list = os.listdir(self.root+'graph1/'+str(index)+'/')
+        smiles1_name_list = os.listdir(self.root+'smiles1/'+str(index)+'/')
+        graph2_name_list = os.listdir(self.root+'graph2/'+str(index)+'/')
+        smiles2_name_list = os.listdir(self.root+'smiles2/'+str(index)+'/')
+        text_name_list = os.listdir(self.root+'text/'+str(index)+'/')
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph1/'+str(index)+'/',graph1_name_list[0])
+        data_graph1 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles1/'+str(index)+'/', smiles1_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt1 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt1 = self.prompt
+        
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph2/'+str(index)+'/',graph2_name_list[0])
+        data_graph2 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles2/'+str(index)+'/', smiles2_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt2 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt2 = self.prompt
+            
+
+        smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s>'+smiles_prompt2+' </s> .'+" What is the Emission max?"
+        # load and process text
+        text_path = os.path.join(self.root, 'text/'+str(index)+'/', text_name_list[0])
+        
+        text_list = []
+        count = 0
+        for line in open(text_path, 'r', encoding='utf-8'):
+            count += 1
+            text_list.append(line.strip('\n'))
+            if count > 100:
+                break
+        text = ' '.join(text_list)
+        return data_graph1,data_graph2, text ,smiles_prompt
+    
+    def tokenizer_text(self, text):
+        sentence_token = self.tokenizer(text=text,
+                                        truncation=True,
+                                        padding='max_length',
+                                        add_special_tokens=True,
+                                        max_length=self.text_max_len,
+                                        return_tensors='pt',
+                                        return_attention_mask=True)
+        return sentence_token
+class MoleculeCaption_universal(Dataset):
+    def __init__(self, root, text_max_len, prompt=None):
+        super(MoleculeCaption_universal, self).__init__(root)
+        self.root = root
+        self.text_max_len = text_max_len
+        self.tokenizer = None
+        
+        if not prompt:
+            self.prompt = 'The SMILES of this molecule is [START_I_SMILES]{}[END_I_SMILES]. '
+        else:
+            self.prompt = prompt
+
+    def get(self, index):
+        return self.__getitem__(index)
+
+    def len(self):
+        return len(self)
+
+    def __len__(self):
+
+        if 'train' in self.root:
+            return count_subdirectories(self.root+"text/")
+        else :
+            return count_subdirectories(self.root+"text/")
+    #return 5
+
+    def __getitem__(self, index):
+        graph1_name_list = os.listdir(self.root+'graph1/'+str(index)+'/')
+        smiles1_name_list = os.listdir(self.root+'smiles1/'+str(index)+'/')
+        graph2_name_list = os.listdir(self.root+'graph2/'+str(index)+'/')
+        smiles2_name_list = os.listdir(self.root+'smiles2/'+str(index)+'/')
+        text_name_list = os.listdir(self.root+'text/'+str(index)+'/')
+        query_name_list = os.listdir(self.root+'query/'+str(index)+'/')
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph1/'+str(index)+'/',graph1_name_list[0])
+        data_graph1 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles1/'+str(index)+'/', smiles1_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt1 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt1 = self.prompt
+        
+        
+        # load and process graph
+        graph_path = os.path.join(self.root, 'graph2/'+str(index)+'/',graph2_name_list[0])
+        data_graph2 = torch.load(graph_path)
+        # load and process smiles
+        smiles_path = os.path.join(self.root, 'smiles2/'+str(index)+'/', smiles2_name_list[0])
+        with open(smiles_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            smiles = lines[0].strip()
+        #这里的smiles是正常的smiles呢
+        if self.prompt.find('{}') >= 0:
+            smiles_prompt2 = self.prompt.format(smiles[:128])
+        else:
+            smiles_prompt2 = self.prompt
+
+        query_path = os.path.join(self.root, 'query/'+str(index)+'/', query_name_list[0])
+        with open(query_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 1
+            query = lines[0].strip()
+        smiles_prompt = '</s> '+smiles_prompt1+' </s>'+' </s>'+smiles_prompt2+' </s> . '+query
+        #smiles_prompt = smiles_prompt1+"The front is the first molecule, followed by the second molecule."+smiles_prompt2+"What are the side effects of these two drugs?"
+        # load and process text
+
+        text_path = os.path.join(self.root, 'text/'+str(index)+'/', text_name_list[0])
+        
+        text_list = []
+        count = 0
+        for line in open(text_path, 'r', encoding='utf-8'):
+            count += 1
+            text_list.append(line.strip('\n'))
+            if count > 100:
+                break
+        text = ' '.join(text_list)
+        return data_graph1,data_graph2, text ,smiles_prompt
+    
+    def tokenizer_text(self, text):
+        sentence_token = self.tokenizer(text=text,
+                                        truncation=True,
+                                        padding='max_length',
+                                        add_special_tokens=True,
+                                        max_length=self.text_max_len,
+                                        return_tensors='pt',
+                                        return_attention_mask=True)
+        return sentence_token  
+    
+if __name__ == '__main__':
+    import numpy as np
+    pretrain = MoleculeCaption('../data/PubChemDataset_v4/pretrain/', 1000, '')
+    train = MoleculeCaption('../data/PubChemDataset_v4/train/', 1000, '')
+    valid = MoleculeCaption('../data/PubChemDataset_v4/valid/', 1000, '')
+    test = MoleculeCaption('../data/PubChemDataset_v4/test/', 1000, '')
+
+    for subset in [pretrain, train, valid, test]:
+        g_lens = []
+        t_lens = []
+        for i in range(len(subset)):  
+            data_graph, text, _ = subset[i]
+            g_lens.append(len(data_graph.x))
+            t_lens.append(len(text.split()))
+            # print(len(data_graph.x))
+        g_lens = np.asarray(g_lens)
+        t_lens = np.asarray(t_lens)
+        print('------------------------')
+        print(g_lens.mean())
+        print(g_lens.min())
+        print(g_lens.max())
+        print(t_lens.mean())
+        print(t_lens.min())
+        print(t_lens.max())

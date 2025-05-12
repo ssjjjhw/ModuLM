@@ -1,0 +1,9 @@
+{
+    "exclude": [
+        "data",
+        "qformer_data",
+        "all_checkpoints",
+        "in-context-pretraining-main",
+        "graph-information-bottleneck-for-Subgraph-Recognition-main"
+    ]
+}
